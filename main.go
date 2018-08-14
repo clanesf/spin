@@ -19,6 +19,7 @@ import (
 	"os"
 
 	"github.com/mitchellh/cli"
+	"github.com/spinnaker/spin/version"
 )
 
 func main() {
@@ -28,6 +29,7 @@ func main() {
 		Name:     "spin",
 		Args:     args,
 		Commands: Commands,
+		Version:  version.String(),
 	}
 
 	c, err := cli.Run()

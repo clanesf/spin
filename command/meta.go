@@ -36,6 +36,7 @@ import (
 	"github.com/mitchellh/go-homedir"
 	"github.com/spinnaker/spin/config"
 	gate "github.com/spinnaker/spin/gateapi"
+	"github.com/spinnaker/spin/version"
 	"golang.org/x/oauth2"
 	"gopkg.in/yaml.v2"
 )
@@ -64,6 +65,8 @@ type ApiMeta struct {
 	// This is the set of flags global to the command parser.
 	gateEndpoint string
 
+	ignoreCertErrors bool
+
 	// Location of the spin config.
 	configLocation string
 }
@@ -75,6 +78,8 @@ func (m *ApiMeta) GlobalFlagSet(cmd string) *flag.FlagSet {
 
 	f.StringVar(&m.gateEndpoint, "gate-endpoint", "http://localhost:8084",
 		"Gate (API server) endpoint")
+
+	f.BoolVar(&m.ignoreCertErrors, "insecure", false, "Ignore Certificate Errors")
 
 	f.Usage = func() {}
 
@@ -108,14 +113,23 @@ func (m *ApiMeta) Process(args []string) ([]string, error) {
 	}
 
 	// CLI configuration.
+	userHome := ""
 	usr, err := user.Current()
 	if err != nil {
-		m.Ui.Error(fmt.Sprintf("Could not read current user from environment, failing."))
-		return args, err
+		// Fallback by trying to read $HOME
+		userHome = os.Getenv("HOME")
+		if userHome != "" {
+			err = nil
+		} else {
+			m.Ui.Error(fmt.Sprintf("Could not read current user from environment, failing."))
+			return args, err
+		}
+	} else {
+		userHome = usr.HomeDir
 	}
 
 	// TODO(jacobkiefer): Add flag for config location?
-	m.configLocation = filepath.Join(usr.HomeDir, ".spin", "config")
+	m.configLocation = filepath.Join(userHome, ".spin", "config")
 	yamlFile, err := ioutil.ReadFile(m.configLocation)
 	if err != nil {
 		m.Ui.Warn(fmt.Sprintf("Could not read configuration file from %s.", m.configLocation))
@@ -147,7 +161,7 @@ func (m *ApiMeta) Process(args []string) ([]string, error) {
 	cfg := &gate.Configuration{
 		BasePath:      m.gateEndpoint,
 		DefaultHeader: make(map[string]string),
-		UserAgent:     "Spin CLI version", // TODO(jacobkiefer): Add a reasonable UserAgent.
+		UserAgent:     fmt.Sprintf("%s/%s", version.UserAgent, version.String()),
 		HTTPClient:    client,
 	}
 	m.GateClient = gate.NewAPIClient(cfg)
@@ -169,6 +183,10 @@ func (m *ApiMeta) InitializeClient() (*http.Client, error) {
 	cookieJar, _ := cookiejar.New(nil)
 	client := http.Client{
 		Jar: cookieJar,
+	}
+
+	if m.ignoreCertErrors {
+		http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 
 	if auth != nil && auth.Enabled && auth.X509 != nil {
@@ -216,6 +234,15 @@ func (m *ApiMeta) InitializeClient() (*http.Client, error) {
 			// Misconfigured.
 			return nil, errors.New("Incorrect x509 auth configuration.\nMust specify certPath/keyPath or cert/key pair.")
 		}
+	} else if auth != nil && auth.Enabled && auth.Basic != nil {
+		if !auth.Basic.IsValid() {
+			return nil, errors.New("Incorrect Basic auth configuration. Must include username and password.")
+		}
+		m.Context = context.WithValue(context.Background(), gate.ContextBasicAuth, gate.BasicAuth{
+			UserName: auth.Basic.Username,
+			Password: auth.Basic.Password,
+		})
+		return &client, nil
 	} else {
 		return &client, nil
 	}
@@ -228,8 +255,9 @@ func (m *ApiMeta) initializeX509Config(client http.Client, clientCA []byte, cert
 	client.Transport.(*http.Transport).TLSClientConfig.MinVersion = tls.VersionTLS12
 	client.Transport.(*http.Transport).TLSClientConfig.PreferServerCipherSuites = true
 	client.Transport.(*http.Transport).TLSClientConfig.Certificates = []tls.Certificate{cert}
-	client.Transport.(*http.Transport).TLSClientConfig.InsecureSkipVerify = true // TODO(jacobkiefer): Add a flag for this.
-
+	if m.ignoreCertErrors {
+		client.Transport.(*http.Transport).TLSClientConfig.InsecureSkipVerify = true
+	}
 	return &client
 }
 
@@ -297,15 +325,16 @@ func (m *ApiMeta) Prompt() string {
 	reader := bufio.NewReader(os.Stdin)
 	m.Ui.Output(fmt.Sprintf("Paste authorization code:"))
 	text, _ := reader.ReadString('\n')
-	return text
+	return strings.TrimSpace(text)
 }
 
 func (m *ApiMeta) Help() string {
 	help := `
 Global Options:
 
-	--gate-endpoint         Gate (API server) endpoint.
-        --no-color              Removes color from CLI output.
+	--gate-endpoint               Gate (API server) endpoint.
+        --no-color                    Removes color from CLI output.
+        --insecure=false              Ignore certificate errors during connection to endpoints.
 	`
 
 	return strings.TrimSpace(help)

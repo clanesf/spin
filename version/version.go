@@ -12,18 +12,27 @@
 //   See the License for the specific language governing permissions and
 //   limitations under the License.
 
-package auth
+package version
 
 import (
-	"github.com/spinnaker/spin/config/auth/basic"
-	"github.com/spinnaker/spin/config/auth/oauth2"
-	"github.com/spinnaker/spin/config/auth/x509"
+	"fmt"
 )
 
-// AuthConfig is the CLI's authentication configuration.
-type AuthConfig struct {
-	Enabled bool                 `yaml:"enabled"`
-	X509    *x509.X509Config     `yaml:"x509,omitempty"`
-	OAuth2  *oauth2.OAuth2Config `yaml:"oauth2,omitempty"`
-	Basic   *basic.BasicConfig   `yaml:"basic,omitempty"`
+// Main version number being run right now.
+var Version = ""
+
+// A pre-release marker for the version. If this is an empty string,
+// then the release is a final release. Otherwise this is a pre-release
+// version e.g. "dev", "alpha", etc.
+var ReleasePhase = "dev"
+
+// User Agent name set in requests.
+const UserAgent = "Spin-CLI"
+
+// String prints the version of the Spin CLI.
+func String() string {
+	if ReleasePhase != "" {
+		return fmt.Sprintf("%s-%s", Version, ReleasePhase)
+	}
+	return Version
 }
